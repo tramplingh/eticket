@@ -1,0 +1,29 @@
+# Node / frontend
+node_modules/
+dist/
+build/
+.env
+.env.*
+
+# Python / backend
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+venv/
+.venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# keep the template
+!.env.example

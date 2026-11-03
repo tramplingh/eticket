@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { @apply bg-paper text-ink font-sans antialiased; }
+  h1, h2, h3 { @apply font-display tracking-tight; }
+  :focus-visible { @apply outline-none ring-2 ring-brand ring-offset-2 ring-offset-paper; }
+  ::selection { background: #FFB83D; color: #171A3A; }
+}
+
+@layer components {
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-45; }
+  .btn-primary { @apply btn bg-brand text-white hover:bg-brand-dark; }
+  .btn-ink { @apply btn bg-ink text-white hover:bg-black/80; }
+  .btn-ghost { @apply btn border border-line bg-white text-ink hover:border-ink/40; }
+  .btn-danger { @apply btn bg-rose text-white hover:bg-rose/90; }
+  .btn-sm { @apply px-3 py-1.5 text-[13px]; }
+  .input { @apply w-full rounded-lg border border-line bg-white px-3 py-2.5 text-sm placeholder:text-muted/60 focus:border-brand focus:outline-none focus:ring-2 focus:ring-brand/25; }
+  .label { @apply mb-1.5 block text-[13px] font-medium text-muted; }
+  .panel { @apply rounded-2xl border border-line bg-white; }
+}
+
+/* ---------- The ticket shape: a card with a perforation notch ---------- */
+.ticket-wrap { height: 100%; filter: drop-shadow(0 1px 1px rgb(23 26 58 / 0.07)) drop-shadow(0 6px 14px rgb(23 26 58 / 0.05)); }
+.ticket {
+  height: 100%;
+  --notch-x: calc(100% - var(--stub, 132px));
+  --r: 10px;
+  background: #fff;
+  -webkit-mask:
+    radial-gradient(circle var(--r) at var(--notch-x) 0, #0000 97%, #000) top / 100% 51% no-repeat,
+    radial-gradient(circle var(--r) at var(--notch-x) 100%, #0000 97%, #000) bottom / 100% 51% no-repeat;
+  mask:
+    radial-gradient(circle var(--r) at var(--notch-x) 0, #0000 97%, #000) top / 100% 51% no-repeat,
+    radial-gradient(circle var(--r) at var(--notch-x) 100%, #0000 97%, #000) bottom / 100% 51% no-repeat;
+}
+.perforation { background-image: linear-gradient(to bottom, #C9CDE3 50%, transparent 50%); background-size: 2px 8px; background-repeat: repeat-y; }
+
+/* ---------- Seats ---------- */
+.seat { width: 2.15rem; height: 2.15rem; border-radius: 0.7rem 0.7rem 0.3rem 0.3rem; font-size: 11px; font-weight: 600; transition: transform .12s, background-color .12s, border-color .12s; }
+.seat-available { background: #fff; border: 1.5px solid #B9BEDA; color: #171A3A; }
+.seat-available:hover { border-color: #3D3DDB; transform: translateY(-2px); }
+.seat-selected { background: #FFB83D; border: 1.5px solid #171A3A; color: #171A3A; transform: translateY(-2px); }
+.seat-booked { background: repeating-linear-gradient(135deg, #E6E8F2 0 4px, #F1F2F8 4px 8px); border: 1.5px solid #E6E8F2; color: #A5A9C4; cursor: not-allowed; }
+.seat-locked { background: #FFF1D6; border: 1.5px dashed #E8B24A; color: #A9781B; cursor: not-allowed; }
+
+.stage { background: linear-gradient(#171A3A, #2A2E63); border-radius: 0 0 50% 50% / 0 0 100% 100%; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+@keyframes toast-in { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
+.toast-in { animation: toast-in .18s ease-out; }
