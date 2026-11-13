@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api, getToken } from '../api'
 import Ticket from '../components/Ticket'
-import { fmtDate, fmtTime, inr } from '../format'
-import { ErrorNote, Loading } from '../ui'
+import { fmtDate, fmtTime, inr, isPast } from '../format'
+import { ErrorNote, Loading, Pill } from '../ui'
 
 const METHODS = [
   { id: 'card', label: 'Card' },
@@ -53,8 +53,10 @@ export default function EventSeats({ user }) {
   const total = chosen.reduce((sum, s) => sum + Number(s.price), 0)
   const availableCount = seats.filter((s) => s.availability_status === 'available').length
 
+  const over = event ? isPast(event.event_date) : false
+
   const toggle = (s) => {
-    if (s.availability_status !== 'available') return
+    if (over || s.availability_status !== 'available') return
     setSelected((prev) =>
       prev.includes(s.event_seat_id)
         ? prev.filter((id) => id !== s.event_seat_id)
@@ -111,7 +113,10 @@ export default function EventSeats({ user }) {
     <div>
       <Link to="/events" className="text-sm font-medium text-muted hover:text-ink">← All events</Link>
       <div className="mb-8 mt-3">
-        {event.event_type && <p className="mb-1 text-sm font-semibold text-brand">{event.event_type}</p>}
+        <div className="mb-1 flex items-center gap-2">
+          {event.event_type && <p className="text-sm font-semibold text-brand">{event.event_type}</p>}
+          {over && <Pill>Event over</Pill>}
+        </div>
         <h1 className="font-display text-4xl font-extrabold">{event.event_name}</h1>
         <p className="mt-2 text-muted">
           {fmtDate(event.event_date)} at {fmtTime(event.event_time)} · {event.venue?.venue_name}, {event.venue?.city}
@@ -125,7 +130,7 @@ export default function EventSeats({ user }) {
             <p className="mt-2 text-center text-xs font-medium text-muted">Stage</p>
           </div>
 
-          <div className="space-y-3 overflow-x-auto pb-2">
+          <div className={`space-y-3 overflow-x-auto pb-2 ${over ? 'opacity-45 saturate-50' : ''}`} aria-disabled={over || undefined}>
             {rows.map(([row, list]) => (
               <div key={row} className="flex items-center justify-center gap-3">
                 <span className="w-6 shrink-0 text-right font-display text-sm font-bold text-muted">{row}</span>
@@ -137,7 +142,7 @@ export default function EventSeats({ user }) {
                       <button
                         key={s.event_seat_id}
                         onClick={() => toggle(s)}
-                        disabled={s.availability_status !== 'available'}
+                        disabled={over || s.availability_status !== 'available'}
                         aria-pressed={on}
                         aria-label={`Row ${row} seat ${s.seat.seat_number}, ${s.availability_status}, ${inr(s.price)}`}
                         title={`${row}${s.seat.seat_number}${s.seat.seat_type ? ' · ' + s.seat.seat_type : ''} · ${inr(s.price)}`}
@@ -167,6 +172,17 @@ export default function EventSeats({ user }) {
         </section>
 
         <aside className="lg:sticky lg:top-24 lg:self-start">
+          {over ? (
+            <div className="panel p-5">
+              <h2 className="font-display text-xl font-bold">Booking closed</h2>
+              <p className="mt-1 text-sm text-muted">This event took place on {fmtDate(event.event_date)}.</p>
+              <div className="mt-4 flex items-baseline justify-between border-t border-line pt-4">
+                <span className="text-sm text-muted">Seats sold</span>
+                <span className="font-display text-3xl font-extrabold">{seats.length - availableCount}<span className="text-base font-semibold text-muted">/{seats.length}</span></span>
+              </div>
+              <Link to="/events" className="btn-ghost mt-4 w-full">See upcoming events</Link>
+            </div>
+          ) : (
           <div className="panel p-5">
             <h2 className="font-display text-xl font-bold">Your seats</h2>
             <p className="text-sm text-muted">{availableCount} of {seats.length} still available</p>
@@ -209,6 +225,7 @@ export default function EventSeats({ user }) {
             </button>
             <p className="mt-3 text-center text-xs text-muted">Demo checkout. No real payment is taken.</p>
           </div>
+          )}
         </aside>
       </div>
     </div>

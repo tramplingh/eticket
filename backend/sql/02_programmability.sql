@@ -150,11 +150,14 @@ END$$
 
 
 -- Events cannot be scheduled (or moved) into the past.
+-- One exception: 03_seed.sql loads event *history* by setting the session variable
+-- @allow_past_events = 1. A session variable belongs to one connection only, and the
+-- application never sets it, so the rule still holds for everything done through the app.
 CREATE TRIGGER trg_event_before_insert
 BEFORE INSERT ON event
 FOR EACH ROW
 BEGIN
-  IF NEW.event_date < CURDATE() THEN
+  IF NEW.event_date < CURDATE() AND COALESCE(@allow_past_events, 0) = 0 THEN
     SIGNAL SQLSTATE '45000'
       SET MESSAGE_TEXT = 'Event date cannot be in the past', MYSQL_ERRNO = 50400;
   END IF;

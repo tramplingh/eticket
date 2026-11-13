@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { fmtDate, fmtTime, inr } from '../format'
-import { Empty, ErrorNote, Field, Loading, useToast } from '../ui'
+import { fmtDate, fmtTime, inr, isPast } from '../format'
+import { Empty, ErrorNote, Field, Loading, Pill, useToast } from '../ui'
+import { EVENT_PERIOD_GROUPS, WhenFilter, applyWhen, defaultWhen } from '../when'
+
+const DEFAULT_FILTERS = { q: '', ...defaultWhen('all') }
 
 const blank = { venue_id: '', event_name: '', event_type: '', event_date: '', event_time: '19:00', base_price: '' }
 
@@ -112,12 +115,24 @@ export default function EventsTab() {
   const [mode, setMode] = useState(null) // null | 'new' | event object
   const [deleting, setDeleting] = useState(null)
   const [error, setError] = useState('')
+  const [filters, setFilters] = useState(DEFAULT_FILTERS)
+
+  const params = new URLSearchParams()
+  if (filters.q) params.set('q', filters.q)
+  const { label, window: dates } = applyWhen(EVENT_PERIOD_GROUPS, filters, params, 'event_date')
+  const query = params.toString()
 
   const load = () => {
-    api.get('/admin/events').then(setEvents).catch((e) => { setError(e.message); setEvents([]) })
-    api.get('/events/types').then(setTypes).catch(() => {})
+    api.get(`/admin/events?${query}`).then((e) => { setEvents(e); setError('') }).catch((e) => { setError(e.message); setEvents([]) })
   }
-  useEffect(() => { load(); api.get('/venues').then(setVenues).catch(() => {}) }, [])
+  useEffect(() => {
+    api.get('/venues').then(setVenues).catch(() => {})
+    api.get('/events/types').then(setTypes).catch(() => {})
+  }, [])
+  useEffect(() => { const t = setTimeout(load, 250); return () => clearTimeout(t) }, [query]) // typing is debounced
+
+  const totals = (events || []).reduce((a, e) => ({ sold: a.sold + e.tickets_sold, revenue: a.revenue + Number(e.revenue) }), { sold: 0, revenue: 0 })
+  const filtered = filters.q || filters.period !== 'all'
 
   const remove = async (ev) => {
     try {
@@ -130,10 +145,19 @@ export default function EventsTab() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-muted">{events ? `${events.length} events` : ''}</p>
-        {!mode && <button onClick={() => setMode('new')} className="btn-primary">New event</button>}
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <input
+          type="search" value={filters.q} onChange={(e) => setFilters({ ...filters, q: e.target.value })}
+          placeholder="Search events" aria-label="Search events" className="input min-w-[180px] flex-1"
+        />
+        <WhenFilter groups={EVENT_PERIOD_GROUPS} value={filters} onChange={setFilters} label="Event date" />
+        {filtered && <button onClick={() => setFilters(DEFAULT_FILTERS)} className="btn-ghost btn-sm">Clear filters</button>}
+        {!mode && <button onClick={() => setMode('new')} className="btn-primary ml-auto">New event</button>}
       </div>
+      <p className="mb-4 text-sm text-muted" aria-live="polite">
+        <b className="font-semibold text-ink">{label}</b>: events {dates}
+        {events && !error && <> · {events.length} {events.length === 1 ? 'event' : 'events'} · {totals.sold} tickets sold · {inr(totals.revenue)} revenue</>}
+      </p>
       <ErrorNote>{error}</ErrorNote>
 
       {mode && (
@@ -145,7 +169,9 @@ export default function EventsTab() {
       )}
 
       {events === null ? <Loading /> : events.length === 0 ? (
-        <Empty title="No events yet">Create your first event to put seats on sale.</Empty>
+        filtered
+          ? <Empty title="No events in this window">Try a wider time range or clear the filters.</Empty>
+          : <Empty title="No events yet">Create your first event to put seats on sale.</Empty>
       ) : (
         <div className="panel overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -156,7 +182,10 @@ export default function EventsTab() {
               {events.map((ev) => (
                 <tr key={ev.event_id} className="align-middle">
                   <td className="px-4 py-3"><p className="font-semibold">{ev.event_name}</p><p className="text-xs text-muted">{ev.event_type || 'No type'}</p></td>
-                  <td className="whitespace-nowrap px-4 py-3">{fmtDate(ev.event_date)}<p className="text-xs text-muted">{fmtTime(ev.event_time)}</p></td>
+                  <td className="whitespace-nowrap px-4 py-3">
+                    {fmtDate(ev.event_date)}
+                    <p className="text-xs text-muted">{fmtTime(ev.event_time)}{isPast(ev.event_date) && <span className="ml-2"><Pill>Event over</Pill></span>}</p>
+                  </td>
                   <td className="px-4 py-3">{ev.venue?.venue_name}<p className="text-xs text-muted">{ev.venue?.city}</p></td>
                   <td className="px-4 py-3">{ev.tickets_sold} <span className="text-muted">/ {ev.seats_total}</span></td>
                   <td className="px-4 py-3 font-semibold">{inr(ev.revenue)}</td>
@@ -169,7 +198,9 @@ export default function EventsTab() {
                       </span>
                     ) : (
                       <span className="inline-flex gap-2">
-                        <button onClick={() => { setMode(ev); window.scrollTo({ top: 0, behavior: 'smooth' }) }} className="btn-ghost btn-sm">Edit</button>
+                        {!isPast(ev.event_date) && (
+                          <button onClick={() => { setMode(ev); window.scrollTo({ top: 0, behavior: 'smooth' }) }} className="btn-ghost btn-sm">Edit</button>
+                        )}
                         <button onClick={() => setDeleting(ev.event_id)} className="btn-ghost btn-sm text-rose">Delete</button>
                       </span>
                     )}

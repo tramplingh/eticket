@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -8,24 +9,78 @@ from app.schemas import EventOut, EventSeatOut
 
 router = APIRouter(prefix="/events", tags=["events"])
 
+# Time windows for the "When" filter, computed by MySQL's own date functions.
+# These are fixed SQL fragments chosen by name; nothing typed by the user is pasted into SQL.
+# Every fragment compares the bare column e.event_date, so the index idx_event_date is still used.
+PERIODS = {
+    "upcoming":   "e.event_date >= CURDATE()",
+    "today":      "e.event_date = CURDATE()",
+    "next_7":     "e.event_date BETWEEN CURDATE() AND CURDATE() + INTERVAL 6 DAY",
+    "next_30":    "e.event_date BETWEEN CURDATE() AND CURDATE() + INTERVAL 29 DAY",
+    "this_month": "e.event_date BETWEEN CURDATE() - INTERVAL (DAYOFMONTH(CURDATE()) - 1) DAY AND LAST_DAY(CURDATE())",
+    "past_7":     "e.event_date BETWEEN CURDATE() - INTERVAL 7 DAY AND CURDATE() - INTERVAL 1 DAY",
+    "past_30":    "e.event_date BETWEEN CURDATE() - INTERVAL 30 DAY AND CURDATE() - INTERVAL 1 DAY",
+    "last_month": "e.event_date BETWEEN LAST_DAY(CURDATE() - INTERVAL 2 MONTH) + INTERVAL 1 DAY "
+                  "AND LAST_DAY(CURDATE() - INTERVAL 1 MONTH)",
+    "past":       "e.event_date < CURDATE()",
+    "all":        None,
+}
+LOOKING_BACK = {"past_7", "past_30", "last_month", "past"}  # newest first for these
+
+Period = Literal["upcoming", "today", "next_7", "next_30", "this_month", "past_7", "past_30", "last_month", "past", "all"]
+
+
+def event_window(period: str, month: str | None, event_date: date | None,
+                 date_from: date | None, date_to: date | None) -> tuple[list[str], list, bool]:
+    """WHERE conditions (and their %s values) for a time window over e.event_date.
+
+    An explicit month / day / range wins over the preset period. Also used by the admin Events tab.
+    Returns (conditions, args, explicit).
+    """
+    conditions, args = [], []
+    if month:
+        first_day = date(int(month[:4]), int(month[5:]), 1)
+        conditions.append("e.event_date BETWEEN %s AND LAST_DAY(%s)")
+        args += [first_day, first_day]
+    if event_date:
+        conditions.append("e.event_date = %s")
+        args.append(event_date)
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="The start date must be on or before the end date")
+    if date_from:
+        conditions.append("e.event_date >= %s")
+        args.append(date_from)
+    if date_to:
+        conditions.append("e.event_date <= %s")
+        args.append(date_to)
+    explicit = bool(month or event_date or date_from or date_to)
+    if not explicit and PERIODS[period]:
+        conditions.append(PERIODS[period])
+    return conditions, args, explicit
+
+
+MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
+
 
 @router.get("", response_model=list[EventOut])
 async def search_events(
     event_type: str | None = Query(None),
-    event_date: date | None = Query(None),
     venue_id: int | None = Query(None),
     q: str | None = Query(None, description="Search in the event name"),
-    include_past: bool = Query(False, description="Also return events that have already happened"),
+    period: Period = Query("upcoming", description="Preset time window (ignored if a date, month or range is given)"),
+    month: str | None = Query(None, pattern=MONTH_PATTERN, description="A calendar month, e.g. 2026-10"),
+    event_date: date | None = Query(None, description="One specific day"),
+    date_from: date | None = Query(None, description="Custom range start (inclusive)"),
+    date_to: date | None = Query(None, description="Custom range end (inclusive)"),
+    include_past: bool = Query(False, description="Old switch, same as period=all"),
     db=Depends(get_db),
 ):
-    # "Display available events": by default only today's and future events are listed.
-    conditions, args = ([] if include_past else ["e.event_date >= CURDATE()"]), []
+    conditions, args, explicit = event_window("all" if include_past else period, month, event_date, date_from, date_to)
+
+    # ---- what and where
     if event_type:
         conditions.append("e.event_type = %s")
         args.append(event_type)
-    if event_date:
-        conditions.append("e.event_date = %s")
-        args.append(event_date)
     if venue_id:
         conditions.append("e.venue_id = %s")
         args.append(venue_id)
@@ -34,7 +89,8 @@ async def search_events(
         args.append(f"%{q}%")  # the wildcards travel inside the parameter, not the SQL text
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    rows = await fetch_all(db, f"{EVENT_SELECT} {where} ORDER BY e.event_date, e.event_time", args)
+    order = "DESC" if not explicit and period in LOOKING_BACK else "ASC"
+    rows = await fetch_all(db, f"{EVENT_SELECT} {where} ORDER BY e.event_date {order}, e.event_time {order}", args)
     return [shape_event(r) for r in rows]
 
 

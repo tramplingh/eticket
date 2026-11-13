@@ -3,8 +3,8 @@
 --  Sample data for the demo. Run after 01_schema.sql and
 --  02_programmability.sql, on an empty database.
 --
---  Event dates are relative to the day you run this (CURDATE() + n), so
---  the demo always has upcoming events no matter when it is loaded.
+--  Event dates are relative to the day you run this (CURDATE() +/- n), so
+--  the demo always has upcoming events (and recent history) whenever it is loaded.
 --
 --  Logins created:
 --    admin@eticket.com          / Admin@123      (admin)
@@ -128,18 +128,26 @@ CALL seed_seat_block(4, 'D', 'H', 12, 'Standard');
 
 -- ---------------------------------------------------------------------
 -- EVENTS  (dates relative to today)
+-- 10 events: 6 upcoming, 4 that already happened, so the "past 7 days /
+-- past 30 days / last month / specific month" filters have history to show.
+-- trg_event_before_insert normally refuses past dates; this session flag
+-- lets the seed (and only the seed) load them.
 -- ---------------------------------------------------------------------
+SET @allow_past_events = 1;
+
 INSERT INTO event (event_id, venue_id, event_name, event_type, event_date, event_time, base_price) VALUES
  ( 1, 1, 'Monsoon Ragas: A Carnatic Evening',     'Concert', CURDATE() + INTERVAL  5 DAY, '18:30:00',  800.00),
  ( 2, 2, 'Laugh Riot: Tales from the Tech Park',  'Comedy',  CURDATE() + INTERVAL  3 DAY, '20:00:00',  500.00),
  ( 3, 2, 'Hamlet, Retold',                        'Theatre', CURDATE() + INTERVAL 12 DAY, '19:30:00',  600.00),
  ( 4, 1, 'Bengaluru Jazz Collective Live',        'Concert', CURDATE() + INTERVAL 18 DAY, '19:00:00', 1000.00),
  ( 5, 4, 'Kathak: Rhythms of the Court',          'Dance',   CURDATE() + INTERVAL  9 DAY, '18:00:00',  700.00),
- ( 6, 3, 'Sufi Nights by the Sea',                'Concert', CURDATE() + INTERVAL  7 DAY, '19:30:00',  900.00),
- ( 7, 3, 'Open Mic Comedy Marathon',              'Comedy',  CURDATE() + INTERVAL 21 DAY, '20:30:00',  400.00),
- ( 8, 4, 'The Magic Lantern: Family Magic Show',  'Family',  CURDATE() + INTERVAL 15 DAY, '11:00:00',  350.00),
- ( 9, 4, 'Indie Rock Showcase',                   'Concert', CURDATE() + INTERVAL 30 DAY, '19:00:00',  750.00),
+ ( 6, 3, 'Sufi Nights by the Sea',                'Concert', CURDATE() - INTERVAL  5 DAY, '19:30:00',  900.00),  -- already happened
+ ( 7, 3, 'Open Mic Comedy Marathon',              'Comedy',  CURDATE() - INTERVAL 16 DAY, '20:30:00',  400.00),  -- already happened
+ ( 8, 4, 'The Magic Lantern: Family Magic Show',  'Family',  CURDATE() - INTERVAL  2 DAY, '11:00:00',  350.00),  -- already happened
+ ( 9, 4, 'Indie Rock Showcase',                   'Concert', CURDATE() - INTERVAL 40 DAY, '19:00:00',  750.00),  -- already happened
  (10, 1, 'Bharatanatyam Margam Recital',          'Dance',   CURDATE() + INTERVAL 40 DAY, '18:00:00',  650.00);
+
+SET @allow_past_events = NULL;
 
 -- Seat inventory for every event in one statement (INSERT ... SELECT),
 -- priced by seat type: VIP 2.5x, Premium 1.5x, Standard 1x base price.
@@ -170,18 +178,25 @@ CALL seed_booking(6, 2, 'E', 1, 10, 'wallet',     120);
 CALL seed_booking(7, 2, 'F', 1, 10, 'card',       100);
 CALL seed_booking(4, 2, 'G', 1, 10, 'upi',         75);
 
-CALL seed_booking(5, 8, 'D', 1,  4, 'upi',         50);
+-- Bookings for events that already happened were made before the event,
+-- and the tickets were checked in at the gate (ticket_status active -> used).
+-- One Sufi Nights booking stays 'active': a no-show.
+CALL seed_booking(5, 8, 'D', 1,  4, 'upi',        120);
+UPDATE ticket SET ticket_status = 'used' WHERE booking_id = @last_booking;
 CALL seed_booking(2, 1, 'C', 6,  8, 'upi',         50);
 SET @partial_booking = @last_booking;
-CALL seed_booking(6, 9, 'E', 5,  8, 'card',        75);
-CALL seed_booking(2, 6, 'A', 7,  8, 'card',        30);
-CALL seed_booking(3, 6, 'G', 1,  4, 'card',        26);
+CALL seed_booking(6, 9, 'E', 5,  8, 'card',      1100);
+UPDATE ticket SET ticket_status = 'used' WHERE booking_id = @last_booking;
+CALL seed_booking(2, 6, 'A', 7,  8, 'card',       200);
+UPDATE ticket SET ticket_status = 'used' WHERE booking_id = @last_booking;
+CALL seed_booking(3, 6, 'G', 1,  4, 'card',       180);
 CALL seed_booking(7, 3, 'B', 4,  5, 'upi',         26);
 SET @cancelled_booking = @last_booking;
 CALL seed_booking(3, 4, 'A', 5,  6, 'netbanking',   5);
 CALL seed_booking(5, 1, 'A', 3,  4, 'card',         3);
 CALL seed_booking(4, 5, 'D', 5,  7, 'upi',          2);
-CALL seed_booking(6, 7, 'C', 9, 12, 'wallet',       1);
+CALL seed_booking(6, 7, 'C', 9, 12, 'wallet',     500);
+UPDATE ticket SET ticket_status = 'used' WHERE booking_id = @last_booking;
 
 
 -- ---------------------------------------------------------------------

@@ -50,3 +50,13 @@
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 @keyframes toast-in { from { transform: translateY(8px); opacity: 0 } to { transform: none; opacity: 1 } }
 .toast-in { animation: toast-in .18s ease-out; }
+
+/* ---------- Landing page ---------- */
+.landing-ticket { --stub: 111px; }
+@media (min-width: 640px) { .landing-ticket { --stub: 171px; } }
+@keyframes rise { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
+.landing-rise { animation: rise .55s ease-out both; }
+.landing-rise-2 { animation-delay: .12s; }
+.landing-rise-3 { animation-delay: .24s; }
+@keyframes live-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
+.live-dot { animation: live-pulse 1.6s ease-in-out infinite; }

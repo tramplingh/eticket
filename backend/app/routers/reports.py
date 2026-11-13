@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.database import fetch_all, fetch_one, get_db
 from app.deps import require_admin
-from app.queries import load_bookings
+from app.queries import BookingPeriod, booking_window, load_bookings
+from app.routers.events import MONTH_PATTERN
 from app.schemas import BookingOut, EventAvailabilityRow, PopularEvent, RevenueReport, SeatAvailability
 
 # Every report is admin-only.
@@ -27,21 +28,32 @@ async def event_revenue(event_id: int, db=Depends(get_db)):
 
 
 @router.get("/popular-events", response_model=list[PopularEvent])
-async def popular_events(limit: int = Query(5, ge=1, le=50), db=Depends(get_db)):
+async def popular_events(
+    limit: int = Query(5, ge=1, le=50),
+    period: BookingPeriod = Query("all", description="Count only tickets from bookings made in this window"),
+    month: str | None = Query(None, pattern=MONTH_PATTERN),
+    booking_date: date | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    db=Depends(get_db),
+):
     """Synopsis: find the most frequently booked events."""
+    conditions, args = booking_window(period, month, booking_date, date_from, date_to)
+    where = " AND ".join(["t.ticket_status <> 'cancelled'", *conditions])
     return await fetch_all(
         db,
-        """
+        f"""
         SELECT e.event_id, e.event_name, COUNT(t.ticket_id) AS tickets_sold
         FROM event e
         JOIN event_seat es ON es.event_id = e.event_id
         JOIN ticket t      ON t.event_seat_id = es.event_seat_id
-        WHERE t.ticket_status <> 'cancelled'
+        JOIN booking b     ON b.booking_id = t.booking_id
+        WHERE {where}
         GROUP BY e.event_id, e.event_name
         ORDER BY tickets_sold DESC, e.event_id
         LIMIT %s
         """,
-        (limit,),
+        (*args, limit),
     )
 
 

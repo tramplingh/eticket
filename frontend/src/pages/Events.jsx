@@ -1,16 +1,30 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
-import { dayNum, fmtTime, inr, monthShort, weekday } from '../format'
+import { dayNum, fmtTime, inr, isPast, monthShort, weekday } from '../format'
 import { Empty, ErrorNote, Loading } from '../ui'
+import { EVENT_PERIOD_GROUPS, WhenFilter, applyWhen, defaultWhen } from '../when'
+
+const DEFAULT_FILTERS = { q: '', event_type: '', venue_id: '', ...defaultWhen('upcoming') }
+
+/** Query string for /events, and the human-readable window being shown. */
+function buildQuery(f) {
+  const params = new URLSearchParams()
+  if (f.q) params.set('q', f.q)
+  if (f.event_type) params.set('event_type', f.event_type)
+  if (f.venue_id) params.set('venue_id', f.venue_id)
+  return { params, ...applyWhen(EVENT_PERIOD_GROUPS, f, params, 'event_date') }
+}
 
 function EventTicket({ ev }) {
-  const soldOut = ev.seats_total > 0 && ev.seats_available === 0
-  const low = !soldOut && ev.seats_total > 0 && ev.seats_available / ev.seats_total <= 0.2
+  const over = isPast(ev.event_date)
+  const soldOut = !over && ev.seats_total > 0 && ev.seats_available === 0
+  const low = !over && !soldOut && ev.seats_total > 0 && ev.seats_available / ev.seats_total <= 0.2
+  const sold = ev.seats_total - ev.seats_available
   return (
     <Link to={`/events/${ev.event_id}`} className="ticket-wrap group block focus-visible:rounded-2xl">
       <div className={`ticket flex ${soldOut ? 'opacity-60' : ''}`} style={{ '--stub': '140px' }}>
-        <div className="flex w-20 shrink-0 flex-col items-center justify-center bg-brand py-4 text-white sm:w-24">
+        <div className={`flex w-20 shrink-0 flex-col items-center justify-center py-4 text-white sm:w-24 ${over ? 'bg-muted' : 'bg-brand'}`}>
           <span className="text-xs font-medium text-white/75">{weekday(ev.event_date)}</span>
           <span className="font-display text-4xl font-extrabold leading-none">{dayNum(ev.event_date)}</span>
           <span className="mt-0.5 text-sm font-semibold">{monthShort(ev.event_date)}</span>
@@ -25,9 +39,19 @@ function EventTicket({ ev }) {
         <div className="perforation my-3 w-0.5 shrink-0 self-stretch" aria-hidden />
 
         <div className="flex w-[140px] shrink-0 flex-col items-end justify-center gap-1 p-4 text-right">
-          <p className="text-xs text-muted">{soldOut ? 'Status' : 'From'}</p>
-          <p className="font-display text-xl font-extrabold">{soldOut ? 'Sold out' : inr(ev.base_price)}</p>
-          {low && <p className="text-xs font-semibold text-[#A9781B]">{ev.seats_available} seats left</p>}
+          {over ? (
+            <>
+              <p className="text-xs text-muted">Event over</p>
+              <p className="font-display text-xl font-extrabold">{sold}<span className="text-sm font-semibold text-muted">/{ev.seats_total}</span></p>
+              <p className="text-xs text-muted">seats sold</p>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-muted">{soldOut ? 'Status' : 'From'}</p>
+              <p className="font-display text-xl font-extrabold">{soldOut ? 'Sold out' : inr(ev.base_price)}</p>
+              {low && <p className="text-xs font-semibold text-[#A9781B]">{ev.seats_available} seats left</p>}
+            </>
+          )}
         </div>
       </div>
     </Link>
@@ -39,7 +63,9 @@ export default function Events() {
   const [error, setError] = useState('')
   const [types, setTypes] = useState([])
   const [venues, setVenues] = useState([])
-  const [filters, setFilters] = useState({ q: '', event_type: '', event_date: '', venue_id: '' })
+  const [filters, setFilters] = useState(DEFAULT_FILTERS)
+  const { params, label: periodLabel, window } = buildQuery(filters)
+  const query = params.toString()
 
   useEffect(() => {
     api.get('/events/types').then(setTypes).catch(() => {})
@@ -51,19 +77,17 @@ export default function Events() {
     const t = setTimeout(async () => {
       setError('')
       try {
-        const params = new URLSearchParams()
-        Object.entries(filters).forEach(([k, v]) => v && params.set(k, v))
-        setEvents(await api.get(`/events?${params}`))
+        setEvents(await api.get(`/events?${query}`))
       } catch (err) {
         setError(err.message)
         setEvents([])
       }
     }, 250)
     return () => clearTimeout(t)
-  }, [filters])
+  }, [query])
 
   const set = (k) => (e) => setFilters({ ...filters, [k]: e.target.value })
-  const hasFilters = Object.values(filters).some(Boolean)
+  const hasFilters = filters.q || filters.event_type || filters.venue_id || filters.period !== 'upcoming'
 
   return (
     <div>
@@ -81,9 +105,9 @@ export default function Events() {
           <option value="">All venues</option>
           {venues.map((v) => <option key={v.venue_id} value={v.venue_id}>{v.venue_name} ({v.city})</option>)}
         </select>
-        <input type="date" value={filters.event_date} onChange={set('event_date')} aria-label="Date" className="input w-auto" />
+        <WhenFilter groups={EVENT_PERIOD_GROUPS} value={filters} onChange={setFilters} />
         {hasFilters && (
-          <button onClick={() => setFilters({ q: '', event_type: '', event_date: '', venue_id: '' })} className="btn-ghost btn-sm">
+          <button onClick={() => setFilters(DEFAULT_FILTERS)} className="btn-ghost btn-sm">
             Clear filters
           </button>
         )}
@@ -106,11 +130,16 @@ export default function Events() {
         </div>
       )}
 
+      <p className="mb-4 text-sm text-muted" aria-live="polite">
+        <b className="font-semibold text-ink">{periodLabel}</b>: events {window}
+        {events && !error && <> · {events.length} {events.length === 1 ? 'event' : 'events'}</>}
+      </p>
+
       <ErrorNote>{error}</ErrorNote>
       {events === null ? (
         <Loading label="Loading events" />
       ) : events.length === 0 && !error ? (
-        <Empty title="No events match">Try a different date or venue, or clear the filters.</Empty>
+        <Empty title="No events in this window">Try a wider time range, another venue, or clear the filters.</Empty>
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {events.map((ev) => <EventTicket key={ev.event_id} ev={ev} />)}

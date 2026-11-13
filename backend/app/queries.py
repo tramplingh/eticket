@@ -1,4 +1,9 @@
 """Shared read queries used by more than one router."""
+from datetime import date
+from typing import Literal
+
+from fastapi import HTTPException
+
 from app.database import fetch_all, placeholders
 
 EVENT_SELECT = """
@@ -86,3 +91,47 @@ async def load_bookings(conn, where_sql: str, args: tuple = (), limit: int | Non
         b["tickets"] = tickets_by_booking.get(b["booking_id"], [])
         b["payment"] = payment_by_booking.get(b["booking_id"])
     return bookings
+
+
+# ---------- time windows over the date a booking was made ----------
+# b.booking_date is a DATETIME, so each window is a half-open range [start, end): a booking at
+# 23:59 on the last day still counts, and the bare column is compared, so idx_booking_date is used.
+# Bookings are never in the future, so "last 7 days" means today and the six days before it.
+BOOKING_PERIODS = {
+    "all":        None,
+    "today":      "b.booking_date >= CURDATE()",
+    "past_7":     "b.booking_date >= CURDATE() - INTERVAL 6 DAY",
+    "past_30":    "b.booking_date >= CURDATE() - INTERVAL 29 DAY",
+    "this_month": "b.booking_date >= CURDATE() - INTERVAL (DAYOFMONTH(CURDATE()) - 1) DAY",
+    "last_month": "b.booking_date >= LAST_DAY(CURDATE() - INTERVAL 2 MONTH) + INTERVAL 1 DAY "
+                  "AND b.booking_date < CURDATE() - INTERVAL (DAYOFMONTH(CURDATE()) - 1) DAY",
+}
+BookingPeriod = Literal["all", "today", "past_7", "past_30", "this_month", "last_month"]
+
+
+def booking_window(period: str, month: str | None, booking_date: date | None,
+                   date_from: date | None, date_to: date | None) -> tuple[list[str], list]:
+    """WHERE conditions (and their %s values) for a time window over b.booking_date.
+
+    An explicit month / day / range wins over the preset period. Fragments are fixed SQL chosen
+    by name; client values only ever travel as %s parameters.
+    """
+    conditions, args = [], []
+    if month:
+        first_day = date(int(month[:4]), int(month[5:]), 1)
+        conditions.append("b.booking_date >= %s AND b.booking_date < DATE_ADD(LAST_DAY(%s), INTERVAL 1 DAY)")
+        args += [first_day, first_day]
+    if booking_date:
+        conditions.append("b.booking_date >= %s AND b.booking_date < DATE_ADD(%s, INTERVAL 1 DAY)")
+        args += [booking_date, booking_date]
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="The start date must be on or before the end date")
+    if date_from:
+        conditions.append("b.booking_date >= %s")
+        args.append(date_from)
+    if date_to:
+        conditions.append("b.booking_date < DATE_ADD(%s, INTERVAL 1 DAY)")
+        args.append(date_to)
+    if not (month or booking_date or date_from or date_to) and BOOKING_PERIODS[period]:
+        conditions.append(BOOKING_PERIODS[period])
+    return conditions, args

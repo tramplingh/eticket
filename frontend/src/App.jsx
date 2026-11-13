@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, NavLink, Link, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, NavLink, Link, useLocation, useNavigate } from 'react-router-dom'
 import { api, getToken } from './api'
 import { ToastProvider } from './ui'
 import Login from './pages/Login'
@@ -9,10 +9,11 @@ import EventSeats from './pages/EventSeats'
 import MyBookings from './pages/MyBookings'
 import Profile from './pages/Profile'
 import Admin from './pages/Admin'
+import Landing from './pages/Landing'
 
 function Logo() {
   return (
-    <Link to="/events" className="flex items-center gap-2.5">
+    <Link to="/" className="flex items-center gap-2.5" title="Project home">
       <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden>
         <rect width="32" height="32" rx="8" fill="#3D3DDB" />
         <path d="M7 11h18v3a2 2 0 0 0 0 4v3H7v-3a2 2 0 0 0 0-4z" fill="#FFB83D" />
@@ -74,6 +75,30 @@ function RequireAdmin({ user, children }) {
   return user ? children : null
 }
 
+// The title page at "/" is full-screen; every other page gets the navbar.
+function Shell({ user, onLogin, onLogout, onUserChange }) {
+  const { pathname } = useLocation()
+  if (pathname === '/') return <Landing user={user} />
+  return (
+    <>
+      <Navbar user={user} onLogout={onLogout} />
+      <main className="mx-auto max-w-6xl px-4 pb-24 pt-8 sm:px-6">
+        <Routes>
+          <Route path="/login" element={<Login onLogin={onLogin} />} />
+          <Route path="/register" element={<Register onLogin={onLogin} />} />
+          <Route path="/events" element={<Events />} />
+          <Route path="/events/:eventId" element={<EventSeats user={user} />} />
+          <Route path="/my-bookings" element={<RequireAuth><MyBookings /></RequireAuth>} />
+          <Route path="/profile" element={<RequireAuth><Profile onUserChange={onUserChange} /></RequireAuth>} />
+          <Route path="/admin" element={<RequireAdmin user={user}><Admin /></RequireAdmin>} />
+          <Route path="/reports" element={<Navigate to="/admin" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+    </>
+  )
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('user')) } catch { return null }
@@ -103,20 +128,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
-        <Navbar user={user} onLogout={handleLogout} />
-        <main className="mx-auto max-w-6xl px-4 pb-24 pt-8 sm:px-6">
-          <Routes>
-            <Route path="/" element={<Navigate to="/events" replace />} />
-            <Route path="/login" element={<Login onLogin={handleLogin} />} />
-            <Route path="/register" element={<Register onLogin={handleLogin} />} />
-            <Route path="/events" element={<Events />} />
-            <Route path="/events/:eventId" element={<EventSeats user={user} />} />
-            <Route path="/my-bookings" element={<RequireAuth><MyBookings /></RequireAuth>} />
-            <Route path="/profile" element={<RequireAuth><Profile onUserChange={handleUserChange} /></RequireAuth>} />
-            <Route path="/admin" element={<RequireAdmin user={user}><Admin /></RequireAdmin>} />
-            <Route path="/reports" element={<Navigate to="/admin" replace />} />
-          </Routes>
-        </main>
+        <Shell user={user} onLogin={handleLogin} onLogout={handleLogout} onUserChange={handleUserChange} />
       </ToastProvider>
     </BrowserRouter>
   )

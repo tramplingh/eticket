@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import { fmtDate, inr } from '../format'
+import { fmtDate, inr, isPast } from '../format'
 import { ErrorNote, Loading } from '../ui'
+import { BOOKING_PERIOD_GROUPS, WhenFilter, applyWhen, defaultWhen } from '../when'
 
 function Stat({ label, value }) {
   return (
@@ -38,15 +39,25 @@ export default function Overview() {
   const [eventId, setEventId] = useState('')
   const [detail, setDetail] = useState(null)
   const [error, setError] = useState('')
+  const [when, setWhen] = useState(() => defaultWhen('all', -30))
+
+  const params = new URLSearchParams()
+  const { label, window: dates } = applyWhen(BOOKING_PERIOD_GROUPS, when, params, 'booking_date')
+  const query = params.toString()
+  const allTime = when.period === 'all'
 
   useEffect(() => {
-    Promise.all([
-      api.get('/admin/stats'), api.get('/reports/popular-events?limit=5'),
-      api.get('/admin/events'), api.get('/reports/seat-availability'),
-    ])
-      .then(([s, p, e, a]) => { setStats(s); setPopular(p); setEvents(e); setSeatRows(a) })
+    Promise.all([api.get('/admin/events'), api.get('/reports/seat-availability')])
+      .then(([e, a]) => { setEvents(e); setSeatRows(a) })
       .catch((e) => setError(e.message))
   }, [])
+
+  // Revenue, tickets, bookings and the popular-events list follow the chosen booking window.
+  useEffect(() => {
+    Promise.all([api.get(`/admin/stats?${query}`), api.get(`/reports/popular-events?limit=5&${query}`)])
+      .then(([s, p]) => { setStats(s); setPopular(p); setError('') })
+      .catch((e) => setError(e.message))
+  }, [query])
 
   useEffect(() => {
     if (!eventId) return setDetail(null)
@@ -61,18 +72,27 @@ export default function Overview() {
   return (
     <div className="space-y-8">
       <ErrorNote>{error}</ErrorNote>
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Stat label="Revenue" value={inr(stats.revenue)} />
-        <Stat label="Tickets sold" value={stats.tickets_sold} />
-        <Stat label="Confirmed bookings" value={stats.confirmed_bookings} />
-        <Stat label="Customers" value={stats.users} />
+      <div>
+        <div className="mb-3 flex flex-wrap items-center gap-3">
+          <WhenFilter groups={BOOKING_PERIOD_GROUPS} value={when} onChange={setWhen} label="Booked" />
+          {!allTime && <button onClick={() => setWhen(defaultWhen('all', -30))} className="btn-ghost btn-sm">Show all time</button>}
+        </div>
+        <p className="mb-4 text-sm text-muted" aria-live="polite">
+          <b className="font-semibold text-ink">{label}</b>: {allTime ? 'every booking ever made' : `bookings made ${dates}`}
+        </p>
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <Stat label="Revenue" value={inr(stats.revenue)} />
+          <Stat label="Tickets sold" value={stats.tickets_sold} />
+          <Stat label="Confirmed bookings" value={stats.confirmed_bookings} />
+          <Stat label={allTime ? 'Customers' : 'Customers who booked'} value={stats.users} />
+        </div>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="panel p-5">
           <h2 className="font-display text-xl font-bold">Most popular events</h2>
-          <p className="mb-4 text-sm text-muted">By tickets sold, cancellations excluded.</p>
-          {popular.length === 0 ? <p className="text-sm text-muted">No tickets sold yet.</p> : (
+          <p className="mb-4 text-sm text-muted">By tickets sold, cancellations excluded{allTime ? '' : `, from bookings made ${dates}`}.</p>
+          {popular.length === 0 ? <p className="text-sm text-muted">{allTime ? 'No tickets sold yet.' : 'No tickets sold in this window.'}</p> : (
             <ol className="space-y-3">
               {popular.map((p) => (
                 <li key={p.event_id}>
@@ -92,7 +112,12 @@ export default function Overview() {
           <p className="mb-4 text-sm text-muted">Revenue and seat availability for one event.</p>
           <select value={eventId} onChange={(e) => setEventId(e.target.value)} aria-label="Event" className="input mb-5">
             <option value="">Choose an event</option>
-            {events.map((e) => <option key={e.event_id} value={e.event_id}>{e.event_name}</option>)}
+            <optgroup label="Upcoming">
+              {events.filter((e) => !isPast(e.event_date)).map((e) => <option key={e.event_id} value={e.event_id}>{e.event_name}</option>)}
+            </optgroup>
+            <optgroup label="Already happened">
+              {events.filter((e) => isPast(e.event_date)).map((e) => <option key={e.event_id} value={e.event_id}>{e.event_name} ({fmtDate(e.event_date)})</option>)}
+            </optgroup>
           </select>
           {detail && (
             <div className="space-y-4">

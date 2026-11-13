@@ -1,12 +1,14 @@
 """Admin-only management endpoints: venues, seats, events, ticket check-in, platform-wide views."""
 from datetime import date
+from typing import Literal
 
 from asyncmy.errors import IntegrityError
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.database import DUPLICATE_KEY, error_code, execute, execute_many, fetch_all, fetch_one, get_db, transaction
 from app.deps import require_admin
-from app.queries import TICKET_SELECT, load_bookings, shape_event
+from app.queries import TICKET_SELECT, BookingPeriod, booking_window, load_bookings, shape_event
+from app.routers.events import MONTH_PATTERN, Period, event_window
 from app.schemas import (
     AdminEventOut,
     AdminStats,
@@ -28,23 +30,84 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(requir
 # ---------- dashboard ----------
 
 @router.get("/stats", response_model=AdminStats)
-async def stats(db=Depends(get_db)):
+async def stats(
+    period: BookingPeriod = Query("all", description="Count only bookings made in this window"),
+    month: str | None = Query(None, pattern=MONTH_PATTERN),
+    booking_date: date | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    db=Depends(get_db),
+):
+    conditions, args = booking_window(period, month, booking_date, date_from, date_to)
+    if not conditions:  # all time
+        return await fetch_one(
+            db,
+            """
+            SELECT
+              (SELECT COUNT(*) FROM `user` WHERE role = 'user')                                AS users,
+              (SELECT COUNT(*) FROM event)                                                     AS events,
+              (SELECT COUNT(*) FROM booking WHERE booking_status = 'confirmed')                AS confirmed_bookings,
+              (SELECT COUNT(*) FROM ticket WHERE ticket_status <> 'cancelled')                 AS tickets_sold,
+              (SELECT COALESCE(SUM(ticket_price), 0) FROM ticket WHERE ticket_status <> 'cancelled') AS revenue
+            """,
+        )
+    # Same aggregates, restricted to bookings made in the window. users = customers who booked in it.
+    w = " AND ".join(conditions)
     return await fetch_one(
         db,
-        """
+        f"""
         SELECT
-          (SELECT COUNT(*) FROM `user` WHERE role = 'user')                                AS users,
-          (SELECT COUNT(*) FROM event)                                                     AS events,
-          (SELECT COUNT(*) FROM booking WHERE booking_status = 'confirmed')                AS confirmed_bookings,
-          (SELECT COUNT(*) FROM ticket WHERE ticket_status <> 'cancelled')                 AS tickets_sold,
-          (SELECT COALESCE(SUM(ticket_price), 0) FROM ticket WHERE ticket_status <> 'cancelled') AS revenue
+          (SELECT COUNT(DISTINCT b.user_id) FROM booking b WHERE {w})                          AS users,
+          (SELECT COUNT(*) FROM event)                                                         AS events,
+          (SELECT COUNT(*) FROM booking b WHERE b.booking_status = 'confirmed' AND {w})        AS confirmed_bookings,
+          (SELECT COUNT(*) FROM ticket t JOIN booking b ON b.booking_id = t.booking_id
+            WHERE t.ticket_status <> 'cancelled' AND {w})                                      AS tickets_sold,
+          (SELECT COALESCE(SUM(t.ticket_price), 0) FROM ticket t JOIN booking b ON b.booking_id = t.booking_id
+            WHERE t.ticket_status <> 'cancelled' AND {w})                                      AS revenue
         """,
+        args * 4,  # the window appears in four subqueries
     )
 
 
+BOOKING_LIMIT = 500
+
+
 @router.get("/bookings", response_model=list[BookingOut])
-async def all_bookings(db=Depends(get_db)):
-    return await load_bookings(db, "1 = 1", (), limit=200)
+async def all_bookings(
+    period: BookingPeriod = Query("all", description="When the booking was made"),
+    month: str | None = Query(None, pattern=MONTH_PATTERN),
+    booking_date: date | None = Query(None, description="Bookings made on one day"),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    event_when: Literal["any", "upcoming", "past"] = Query("any", description="Bookings for events still to come, or already over"),
+    event_id: int | None = Query(None),
+    status: Literal["pending", "confirmed", "cancelled"] | None = Query(None),
+    q: str | None = Query(None, description="Customer name or email"),
+    db=Depends(get_db),
+):
+    conditions, args = booking_window(period, month, booking_date, date_from, date_to)
+    if event_id or event_when != "any":
+        # EXISTS (a semi-join): keep the booking if at least one of its tickets is for a matching
+        # event. Unlike a plain JOIN, a booking with several tickets is still listed once.
+        sub = ["t.booking_id = b.booking_id"]
+        if event_id:
+            sub.append("es.event_id = %s")
+            args.append(event_id)
+        if event_when == "upcoming":
+            sub.append("e.event_date >= CURDATE()")
+        elif event_when == "past":
+            sub.append("e.event_date < CURDATE()")
+        conditions.append(
+            "EXISTS (SELECT 1 FROM ticket t JOIN event_seat es ON es.event_seat_id = t.event_seat_id "
+            f"JOIN event e ON e.event_id = es.event_id WHERE {' AND '.join(sub)})"
+        )
+    if status:
+        conditions.append("b.booking_status = %s")
+        args.append(status)
+    if q:
+        conditions.append("(CONCAT(u.first_name, ' ', u.last_name) LIKE %s OR u.email LIKE %s)")
+        args += [f"%{q}%", f"%{q}%"]  # wildcards travel inside the parameter
+    return await load_bookings(db, " AND ".join(conditions) or "1 = 1", tuple(args), limit=BOOKING_LIMIT)
 
 
 # ---------- venues & seats ----------
@@ -134,9 +197,26 @@ ADMIN_EVENT_SELECT = """
 """
 
 
+LOOKING_AHEAD = {"upcoming", "today", "next_7", "next_30", "this_month"}  # soonest first for these
+
+
 @router.get("/events", response_model=list[AdminEventOut])
-async def admin_events(db=Depends(get_db)):
-    rows = await fetch_all(db, f"{ADMIN_EVENT_SELECT} ORDER BY e.event_date DESC, e.event_time DESC")
+async def admin_events(
+    period: Period = Query("all", description="Same time windows as GET /events; past events included by default"),
+    month: str | None = Query(None, pattern=MONTH_PATTERN),
+    event_date: date | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    q: str | None = Query(None, description="Search in the event name"),
+    db=Depends(get_db),
+):
+    conditions, args, explicit = event_window(period, month, event_date, date_from, date_to)
+    if q:
+        conditions.append("e.event_name LIKE %s")
+        args.append(f"%{q}%")
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    order = "ASC" if not explicit and period in LOOKING_AHEAD else "DESC"
+    rows = await fetch_all(db, f"{ADMIN_EVENT_SELECT} {where} ORDER BY e.event_date {order}, e.event_time {order}", args)
     return [shape_event(r) for r in rows]
 
 
